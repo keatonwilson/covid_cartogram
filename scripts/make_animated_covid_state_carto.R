@@ -150,13 +150,17 @@ g1 = ggplot() +
     transition_states(week_label, transition_length = 3, state_length = 1) +
     theme_void() +
     theme(legend.position = "none", 
-          plot.title = element_text(hjust = 0.1, size = 22)) +
+          plot.subtitle = element_text(hjust = 0.1, size = 28),
+          plot.title = element_text(hjust = 0.1, size = 32), 
+          plot.caption = element_text(size = 18, hjust = 0.8)) +
     ggrepel::geom_label_repel(data = summary_df,
-                              size = 6,
+                              size = 8,
                               seed = 42,
                               aes(x = X, y = Y, 
                                   label = paste(state, ":", trunc(num_cases)))) +
-    labs(title = 'Week ending in {closest_state}') +
+    labs(subtitle = 'Week ending in {closest_state}',
+         title = 'Cumulative number of cases of Covid-19 in the US by week', 
+         caption = 'Data source: New York Times') +
     scale_fill_viridis(option = "magma") +
     ease_aes('sine-in-out')
     
