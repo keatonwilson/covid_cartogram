@@ -13,31 +13,35 @@ require(getcartr)
 require(sfheaders)
 require(maptools)
 require(FRK)
-require(spdplyr)
 require(cartogram)
 require(mcla)
 require(parallel)
-source("./scripts/get_nytimes_covid_data.R")
 require(gganimate)
-require(purrr)
 require(transformr)
+require(purrr)
 require(ggthemes)
 require(ggrepel)
 require(viridis)
+require(raster)
+
+# pulling nytimes data function
+source("./scripts/get_nytimes_covid_data.R")
 
 
-make_animated_county_carto = function(){
+make_animated_state_carto = function(){
   # pulling most recent data
   get_nytimes_covid_data()
   
   
-  # loading covid data and joining to county data
+  # loading covid data and joining to state data
   covid_data = read_csv("./data/covid_19_by_state.csv") %>%
     mutate(week = lubridate::epiweek(date)) %>%
     group_by(week, state) %>%
     summarize(num_cases = max(cases), 
               num_deaths = max(deaths)) %>%
-    ungroup()
+    ungroup() %>%
+    group_by(week) %>%
+      mutate(perc_by_week = num_cases/sum(num_cases))
   
   # getting a list of dates
   sf = stamp("January 1, 2020")
@@ -52,15 +56,20 @@ make_animated_county_carto = function(){
     pull(last_sunday)
   
   # splitting to a list separated by week
-  covid_split = split(covid_data, covid_data$state)
+  covid_split = split(covid_data, covid_data$week)
   
-  # counties data
-  states = map_data("state") %>%
-    rename(state = region) %>%
-    mutate(state = stringr::str_to_title(state))
+  usa <- maps::map("state", fill = TRUE)
+  IDs <- sapply(strsplit(usa$names, ":"), function(x) x[1])
+  usa <- map2SpatialPolygons(usa, IDs=IDs, proj4string=CRS("+proj=longlat +datum=WGS84"))
+  usa <- SpatialPolygonsDataFrame(usa, 
+                                  data = data.frame(unique(IDs), 
+                                                    row.names = unique(IDs)) )
+  usa@data = usa@data %>% transmute(state = stringr::str_to_title(unique.IDs.))
   
-  # doing a right join on every item in the list
-  joined_list = lapply(covid_split, right_join, states, by = c("state"))
+  joined_list = list()
+  for(i in 1:length(covid_split)){
+    joined_list[[i]] = merge(usa, covid_split[[i]], all.x = TRUE, by = "state")
+  }
   
   # generating week vectors
   weeks = names(covid_split)
@@ -78,113 +87,83 @@ make_animated_county_carto = function(){
     joined_list[[i]]$num_deaths = ifelse(is.na(joined_list[[i]]$num_deaths), 
                                          0, 
                                          joined_list[[i]]$num_deaths)
+    joined_list[[i]]$perc_by_week = ifelse(is.na(joined_list[[i]]$perc_by_week), 
+                                           0, 
+                                           joined_list[[i]]$perc_by_week)
   }
   
-  glimpse(joined_list)
+ 
+  #re-projecting
+  sp_list = lapply(joined_list, spTransform, CRS("+init=epsg:3857"))
   
-  # cartograms for each week
-  
-  # turning weekly dataframes into an sf polygon objects for cartogram processing
-  sf_list = lapply(joined_list, 
-                   sf_polygon, 
-                   x = "long", 
-                   y = "lat", 
-                   polygon_id = "group", 
-                   keep = TRUE)
-  
-  # using multi-core parallel lapply to generate cartograms for each week
-  carto_list = mclapply(sf_list, 
-                        cartogram_cont, 
+  # small addition to all values to get cartogram to plot reasonably
+  for(i in 1:length(sp_list)){
+    sp_list[[i]]$num_cases = sp_list[[i]]$num_cases + 0.05
+  }
+
+  #using multi-core parallel lapply to generate cartograms for each week
+  carto_list = mclapply(sp_list,
+                      cartogram_cont,
                         weight = "num_cases", 
-                        prepare = "remove")
-  
-  # un listing into a big sf
-  unlisted_sf = reduce(carto_list, sf:::rbind.sf)
+                        itermax = 15, 
+                        prepare = "adjust")
+
+  # merging
+  merged = do.call(bind, carto_list)
+  merged@data = merged@data %>%
+    mutate(num_cases = num_cases - 0.05)
   
   # changing to a factor
-  unlisted_sf$week = factor(as.numeric(unlisted_sf$week))
+  merged$week = (as.numeric(merged$week))
   
-  unlisted_sf$week_label = factor(unlisted_sf$week, labels = ending_days)
-  unlisted_sf = unlisted_sf %>%
-    dplyr::select(-group) 
+  merged$week_label = factor(merged$week, labels = ending_days)
   
-  # testing
-  unlisted_sf_mini = unlisted_sf %>% filter(week == 4 | week == 5)
-  unlisted_sf_mini$week_label = droplevels(unlisted_sf_mini$week_label)
-  unlisted_sf_mini = unlisted_sf_mini %>%
-    dplyr::select(-group)
+  # to sf
+  merged_sf = st_as_sf(merged)
   
   # Generating summary df for labels
   # Centroid coords
-  coords = unlisted_sf_mini %>%
+  coords = merged_sf %>%
+    group_by(state) %>%
     st_centroid() %>%
     st_coordinates() %>%
     as_tibble()
   
   # binding and summarizing
-  summary_df = unlisted_sf_mini %>%
+  summary_df = merged_sf %>%
     bind_cols(coords) %>%
     group_by(week_label) %>%
     filter(num_cases != 0) %>%
-    top_n(10, num_cases) %>%
-    mutate(labels = paste(county, state, sep = ","))
+    top_n(5, num_cases) %>%
+    ungroup() %>%
+    mutate(labels = paste(state, ": ", num_cases))
   
-  g1 = ggplot() +
-    geom_sf(data = unlisted_sf_mini, aes(fill = state), size = 0.1) +
-    geom_label_repel(data = summary_df, aes(x = X, y = Y, label = labels, 
-                                            group =county), 
-                     seed = 42, vjust = 20) +
+  #testing frames out in in a facet
+  # ggplot() +
+  #   geom_sf(data = merged_sf, aes(fill = log(num_cases)), color = "lightgrey") +
+  #   theme_void() +
+  #   scale_fill_viridis(option = "magma") +
+  #   facet_wrap(~ week_label)
+  
+g1 = ggplot() +
+    geom_sf(data = merged_sf, aes(fill = log(num_cases), group = state), color = "lightgrey") +
     transition_states(week_label, transition_length = 3, state_length = 1) +
     theme_void() +
     theme(legend.position = "none", 
           plot.title = element_text(hjust = 0.1, size = 22)) +
+    ggrepel::geom_label_repel(data = summary_df, 
+                              seed = 42,
+                              aes(x = X, y = Y, 
+                                  label = paste(state, ":", trunc(num_cases)))) +
     labs(title = 'Week ending in {closest_state}') +
+    scale_fill_viridis(option = "magma") +
     ease_aes('sine-in-out')
+    
+  # what is colorado's deal?
+  # ggplot(data = merged_sf %>% filter(state %in% c("Colorado", "California", "New Mexico")), aes(x = week, y = perc_by_week, color = state)) +
+  #   geom_line()
   
   
-  
-  anim = animate(plot = g1, height = 1200, width = 1800, duration = 20, detail = 5)
-  anim
-  #full
-  # testing
-  unlisted_sf$week_label = droplevels(unlisted_sf$week_label)
-  
-  # Generating summary df for labels
-  # Centroid coords
-  coords = unlisted_sf %>%
-    st_centroid() %>%
-    st_coordinates() %>%
-    as_tibble()
-  
-  # binding and summarizing
-  summary_df = unlisted_sf %>%
-    bind_cols(coords) %>%
-    group_by(week_label) %>%
-    filter(num_cases != 0) %>%
-    top_n(10, num_cases) %>%
-    mutate(labels = paste(county, state, sep = ",")) %>%
-    ungroup()
-  
-  # making a unique county_state_id
-  unlisted_sf = unlisted_sf %>%
-    mutate(unique = paste(county, state, sep = "_"))
-  
-  g1 = ggplot() +
-    geom_sf(data = unlisted_sf, 
-            aes(fill = as.factor(state), 
-                group = as.factor(unique)), 
-            size = 0.1) +
-    geom_label_repel(data = summary_df, aes(x = X, y = Y, label = labels, 
-                                            group =as.factor(county)), 
-                     seed = 42, vjust = 20) +
-    transition_states(week_label, transition_length = 3, state_length = 1) +
-    theme_void() +
-    theme(legend.position = "none", 
-          plot.title = element_text(hjust = 0.1, size = 22)) +
-    labs(title = 'Week ending in {closest_state}') +
-    ease_aes('sine-in-out')
-  
-  
-  anim = animate(plot = g1, height = 1200, width = 1800, duration = 20, detail = 5)
-  
+  anim = gganimate::animate(plot = g1, height = 1200, width = 1800, duration = 20, detail = 5)
+  anim_save("./output/state_cartogram.gif", animation = anim)
 }

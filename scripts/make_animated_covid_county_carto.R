@@ -98,7 +98,8 @@ make_animated_county_carto = function(){
   carto_list = mclapply(sf_list, 
                       cartogram_cont, 
                       weight = "num_cases", 
-                      prepare = "remove")
+                      prepare = "remove", 
+                      itermax = 5)
   
   # un listing into a big sf
   unlisted_sf = reduce(carto_list, sf:::rbind.sf)
@@ -110,43 +111,7 @@ make_animated_county_carto = function(){
   unlisted_sf = unlisted_sf %>%
     dplyr::select(-group) 
   
-# testing
-unlisted_sf_mini = unlisted_sf %>% filter(week == 4 | week == 5)
-unlisted_sf_mini$week_label = droplevels(unlisted_sf_mini$week_label)
-unlisted_sf_mini = unlisted_sf_mini %>%
-  dplyr::select(-group)
 
-# Generating summary df for labels
-# Centroid coords
-coords = unlisted_sf_mini %>%
-  st_centroid() %>%
-  st_coordinates() %>%
-  as_tibble()
-
-# binding and summarizing
-summary_df = unlisted_sf_mini %>%
-  bind_cols(coords) %>%
-  group_by(week_label) %>%
-  filter(num_cases != 0) %>%
-  top_n(10, num_cases) %>%
-  mutate(labels = paste(county, state, sep = ","))
-
-  g1 = ggplot() +
-    geom_sf(data = unlisted_sf_mini, aes(fill = state), size = 0.1) +
-    geom_label_repel(data = summary_df, aes(x = X, y = Y, label = labels, 
-                                           group =county), 
-                    seed = 42, vjust = 20) +
-    transition_states(week_label, transition_length = 3, state_length = 1) +
-    theme_void() +
-    theme(legend.position = "none", 
-          plot.title = element_text(hjust = 0.1, size = 22)) +
-    labs(title = 'Week ending in {closest_state}') +
-    ease_aes('sine-in-out')
-    
-    
-
-anim = animate(plot = g1, height = 1200, width = 1800, duration = 20, detail = 5)
-anim
 #full
 # testing
 unlisted_sf$week_label = droplevels(unlisted_sf$week_label)
@@ -170,6 +135,10 @@ summary_df = unlisted_sf %>%
 # making a unique county_state_id
 unlisted_sf = unlisted_sf %>%
   mutate(unique = paste(county, state, sep = "_"))
+
+ggplot(unlisted_sf) +
+  geom_sf() +
+  facet_wrap(~ week_label)
 
 g1 = ggplot() +
   geom_sf(data = unlisted_sf, 
