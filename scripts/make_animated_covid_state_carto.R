@@ -151,7 +151,8 @@ g1 = ggplot() +
     theme_void() +
     theme(legend.position = "none", 
           plot.title = element_text(hjust = 0.1, size = 22)) +
-    ggrepel::geom_label_repel(data = summary_df, 
+    ggrepel::geom_label_repel(data = summary_df,
+                              size = 6,
                               seed = 42,
                               aes(x = X, y = Y, 
                                   label = paste(state, ":", trunc(num_cases)))) +
