@@ -23,6 +23,7 @@ require(ggthemes)
 require(ggrepel)
 require(viridis)
 require(raster)
+require(gifski)
 
 # pulling nytimes data function
 source("./scripts/get_nytimes_covid_data.R")
@@ -124,10 +125,20 @@ make_animated_state_carto = function(){
   # Generating summary df for labels
   # Centroid coords
   coords = merged_sf %>%
-    group_by(state) %>%
     st_centroid() %>%
     st_coordinates() %>%
     as_tibble()
+  
+states = unique(merged_sf$state)
+
+centroid_list = list()
+for(i in seq_along(states)){
+  centroid_list[i] = merged_sf %>% 
+    filter(state == states[i]) %>%
+    st_centroid() %>%
+    st_coordinates() %>%
+    as_tibble()
+}
   
   # binding and summarizing
   summary_df = merged_sf %>%
@@ -169,6 +180,6 @@ g1 = ggplot() +
   #   geom_line()
   
   
-  anim = gganimate::animate(plot = g1, height = 1200, width = 1800, duration = 20, detail = 5)
-  anim_save("./output/state_cartogram.gif", animation = anim)
+  anim = gganimate::animate(plot = g1, height = 1200, width = 1800, duration = 20, detail = 5, renderer = gifski_renderer())
+  save_animation(anim, file = "./output/state_cartogram.gif")
 }
